@@ -88,7 +88,7 @@ prompt = [
 
 # Streamlit configuration
 st.set_page_config(page_title="SQL Query Generator", layout="centered", initial_sidebar_state="expanded")
-st.markdown("<h1 style='text-align: center; color: #2c3e50;'>SQL Query Generator with Gemini AI</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #e74c3c;'>AI-Based SQL Query Generator with Gemini AI</h1>", unsafe_allow_html=True)
 
 # Sidebar for navigation
 st.sidebar.title("Navigation")
@@ -106,7 +106,7 @@ if page == "Generate SQL Query":
                 st.subheader("Query Results:")
                 st.dataframe(df)
                 st.session_state["df"] = df
-            elif response.lower().startswith(("insert", "delete")):
+            elif response.lower().startswith(("insert", "delete", "update")):
                 execute_sql(response, "student.db")
                 st.success("SQL query executed successfully!")
             else:
@@ -120,13 +120,16 @@ elif page == "Insert Record":
         name = st.text_input("Name")
         class_ = st.text_input("Class")
         section = st.text_input("Section")
-        marks = st.number_input("Marks", min_value=0, max_value=100)
+        marks = st.text_input("Marks")  # Changed to text input for optional value
         submitted = st.form_submit_button("Insert Record")
         if submitted:
-            insert_sql = f"INSERT INTO STUDENT (NAME, CLASS, SECTION, MARKS) VALUES ('{name}', '{class_}', '{section}', {marks})"
             try:
+                marks_value = int(marks) if marks else "NULL"  # Convert to integer if provided
+                insert_sql = f"INSERT INTO STUDENT (NAME, CLASS, SECTION, MARKS) VALUES ('{name}', '{class_}', '{section}', {marks_value})"
                 execute_sql(insert_sql, "student.db")
                 st.success("Record inserted successfully!")
+            except ValueError:
+                st.error("Marks must be a number.")
             except Exception as e:
                 st.error(f"An error occurred: {e}")
 
@@ -136,7 +139,7 @@ elif page == "Delete Record":
         delete_name = st.text_input("Name")
         delete_class = st.text_input("Class")
         delete_section = st.text_input("Section")
-        delete_marks = st.number_input("Marks", min_value=0, max_value=100)
+        delete_marks = st.text_input("Marks")  # Changed to text input for optional value
         delete_submitted = st.form_submit_button("Delete Record")
         if delete_submitted:
             delete_conditions = []
@@ -146,15 +149,23 @@ elif page == "Delete Record":
                 delete_conditions.append(f"CLASS = '{delete_class}'")
             if delete_section:
                 delete_conditions.append(f"SECTION = '{delete_section}'")
-            if delete_marks is not None:
-                delete_conditions.append(f"MARKS = {delete_marks}")
+            if delete_marks:
+                try:
+                    delete_marks_value = int(delete_marks)
+                    delete_conditions.append(f"MARKS = {delete_marks_value}")
+                except ValueError:
+                    st.error("Marks must be a number.")
 
-            delete_sql = "DELETE FROM STUDENT WHERE " + " AND ".join(delete_conditions)
-            try:
-                execute_sql(delete_sql, "student.db")
-                st.success("Record deleted successfully!")
-            except Exception as e:
-                st.error(f"An error occurred: {e}")
+            if delete_conditions:
+                delete_sql = "DELETE FROM STUDENT WHERE " + " AND ".join(delete_conditions)
+                st.write(f"Executing SQL: {delete_sql}")  # Debugging: print the query
+                try:
+                    execute_sql(delete_sql, "student.db")
+                    st.success("Record deleted successfully!")
+                except Exception as e:
+                    st.error(f"An error occurred: {e}")
+            else:
+                st.warning("Please provide at least one condition to delete a record.")
 
 elif page == "Visualize Data":
     if "df" in st.session_state:
