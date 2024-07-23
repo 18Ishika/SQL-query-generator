@@ -3,6 +3,8 @@ import streamlit as st
 import os
 import sqlite3
 import google.generativeai as genai
+import pandas as pd
+import plotly.express as px
 
 # Load environment variables
 load_dotenv()
@@ -12,16 +14,35 @@ genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 def get_response(question, prompt):
     model = genai.GenerativeModel("gemini-pro")
     response = model.generate_content([prompt[0], question])
-    return response.text
+    return response.text.strip().strip("").replace("sql", "").strip()
 
 def read_sql(sql, db):
     conn = sqlite3.connect(db)
-    cur = conn.cursor()
-    cur.execute(sql)
-    rows = cur.fetchall()
+    df = pd.read_sql_query(sql, conn)
+    conn.close()
+    return df
+
+def execute_sql(sql, db):
+    conn = sqlite3.connect(db)
+    cursor = conn.cursor()
+    cursor.execute(sql)
     conn.commit()
     conn.close()
-    return rows
+
+def create_visualization(df, x_col, y_col, plot_type="bar"):
+    if not df.empty:
+        if plot_type == "bar":
+            fig = px.bar(df, x=x_col, y=y_col, title=f"{plot_type.capitalize()} Plot: {y_col} vs {x_col}")
+        elif plot_type == "line":
+            fig = px.line(df, x=x_col, y=y_col, title=f"{plot_type.capitalize()} Plot: {y_col} vs {x_col}")
+        elif plot_type == "scatter":
+            fig = px.scatter(df, x=x_col, y=y_col, title=f"{plot_type.capitalize()} Plot: {y_col} vs {x_col}")
+        else:
+            st.warning(f"Unsupported plot type: {plot_type}. Defaulting to bar plot.")
+            fig = px.bar(df, x=x_col, y=y_col, title=f"Bar Plot: {y_col} vs {x_col}")
+        return fig
+    else:
+        return None
 
 # Prompt for the generative AI
 prompt = [
@@ -54,7 +75,7 @@ prompt = [
     SELECT * FROM STUDENT ORDER BY MARKS DESC;
 
     9. "Get the NAME of the student with the highest MARKS." should be converted to:
-    SELECT NAME FROM STUDENT ORDER BY MARKS DESC LIMIT 2;
+    SELECT NAME FROM STUDENT ORDER BY MARKS DESC LIMIT 1;
 
     10. "Show the CLASS and average MARKS for each CLASS." should be converted to:
     SELECT CLASS, AVG(MARKS) FROM STUDENT GROUP BY CLASS;
@@ -66,22 +87,88 @@ prompt = [
 ]
 
 # Streamlit configuration
-st.set_page_config(page_title="SQL Query Generator", layout="centered")
-st.header("SQL Query Generator with Gemini AI")
+st.set_page_config(page_title="SQL Query Generator", layout="centered", initial_sidebar_state="expanded")
+st.markdown("<h1 style='text-align: center; color: #2c3e50;'>SQL Query Generator with Gemini AI</h1>", unsafe_allow_html=True)
 
-# User input
-question = st.text_input("Ask your question about the STUDENT database:", key="input")
+# Sidebar for navigation
+st.sidebar.title("Navigation")
+page = st.sidebar.radio("Go to", ["Generate SQL Query", "Insert Record", "Delete Record", "Visualize Data"])
 
-# Button to submit the question
-if st.button("Generate SQL Query"):
-    response = get_response(question, prompt)
-    st.write(f"Generated SQL Query: {response}")
-    try:
-        data = read_sql(response, "student.db")
-        st.subheader("Query Results:")
-        for i in data:
-            print(i)
-            st.subheader(i)
-        
-    except Exception as e:
-        st.error(f"An error occurred: {e}")
+if page == "Generate SQL Query":
+    st.subheader("Generate SQL Query from Natural Language")
+    question = st.text_input("Ask your question about the STUDENT database:", key="input")
+    if st.button("Generate SQL Query"):
+        response = get_response(question, prompt)
+        st.write(f"Generated SQL Query: {response}")
+        try:
+            if response.lower().startswith("select"):
+                df = read_sql(response, "student.db")
+                st.subheader("Query Results:")
+                st.dataframe(df)
+                st.session_state["df"] = df
+            elif response.lower().startswith(("insert", "delete")):
+                execute_sql(response, "student.db")
+                st.success("SQL query executed successfully!")
+            else:
+                st.error("Generated query is not supported for execution.")
+        except Exception as e:
+            st.error(f"An error occurred: {e}")
+
+elif page == "Insert Record":
+    st.subheader("Insert a New Record")
+    with st.form("insert_form"):
+        name = st.text_input("Name")
+        class_ = st.text_input("Class")
+        section = st.text_input("Section")
+        marks = st.number_input("Marks", min_value=0, max_value=100)
+        submitted = st.form_submit_button("Insert Record")
+        if submitted:
+            insert_sql = f"INSERT INTO STUDENT (NAME, CLASS, SECTION, MARKS) VALUES ('{name}', '{class_}', '{section}', {marks})"
+            try:
+                execute_sql(insert_sql, "student.db")
+                st.success("Record inserted successfully!")
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
+
+elif page == "Delete Record":
+    st.subheader("Delete a Record")
+    with st.form("delete_form"):
+        delete_name = st.text_input("Name")
+        delete_class = st.text_input("Class")
+        delete_section = st.text_input("Section")
+        delete_marks = st.number_input("Marks", min_value=0, max_value=100)
+        delete_submitted = st.form_submit_button("Delete Record")
+        if delete_submitted:
+            delete_conditions = []
+            if delete_name:
+                delete_conditions.append(f"NAME = '{delete_name}'")
+            if delete_class:
+                delete_conditions.append(f"CLASS = '{delete_class}'")
+            if delete_section:
+                delete_conditions.append(f"SECTION = '{delete_section}'")
+            if delete_marks is not None:
+                delete_conditions.append(f"MARKS = {delete_marks}")
+
+            delete_sql = "DELETE FROM STUDENT WHERE " + " AND ".join(delete_conditions)
+            try:
+                execute_sql(delete_sql, "student.db")
+                st.success("Record deleted successfully!")
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
+
+elif page == "Visualize Data":
+    if "df" in st.session_state:
+        st.subheader("Visualization Options")
+        with st.expander("Select Visualization Options"):
+            x_col = st.selectbox("Select column for x-axis:", st.session_state["df"].columns)
+            y_col = st.selectbox("Select column for y-axis:", st.session_state["df"].columns)
+            plot_type = st.selectbox("Select plot type:", ["bar", "line", "scatter"])
+
+        if st.button("Visualize Data"):
+            fig = create_visualization(st.session_state["df"], x_col, y_col, plot_type)
+            if fig:
+                st.plotly_chart(fig)
+            else:
+                st.write("No data available to visualize.")
+    else:
+        st.write("No data available. Generate a SQL query first.")
