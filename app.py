@@ -5,6 +5,7 @@ import sqlite3
 import google.generativeai as genai
 import pandas as pd
 import plotly.express as px
+from datetime import datetime
 
 # Load environment variables
 load_dotenv()
@@ -22,10 +23,13 @@ def read_sql(sql, db):
     conn.close()
     return df
 
-def execute_sql(sql, db):
+def execute_sql(sql, db, action_description):
     conn = sqlite3.connect(db)
     cursor = conn.cursor()
     cursor.execute(sql)
+    conn.commit()
+    cursor.execute("INSERT INTO HISTORY (timestamp, action_description, query) VALUES (?, ?, ?)",
+                   (datetime.now(), action_description, sql))
     conn.commit()
     conn.close()
 
@@ -43,6 +47,23 @@ def create_visualization(df, x_col, y_col, plot_type="bar"):
         return fig
     else:
         return None
+
+# Initialize database and history table
+def initialize_db(db):
+    conn = sqlite3.connect(db)
+    cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS STUDENT (
+                        NAME TEXT, 
+                        CLASS TEXT, 
+                        SECTION TEXT, 
+                        MARKS INTEGER)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS HISTORY (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT,
+                        action_description TEXT,
+                        query TEXT)''')
+    conn.commit()
+    conn.close()
 
 # Prompt for the generative AI
 prompt = [
@@ -86,13 +107,16 @@ prompt = [
     """
 ]
 
+# Initialize the database
+initialize_db("student.db")
+
 # Streamlit configuration
 st.set_page_config(page_title="SQL Query Generator", layout="centered", initial_sidebar_state="expanded")
 st.markdown("<h1 style='text-align: center; color: #e74c3c;'>AI-Based SQL Query Generator with Gemini AI</h1>", unsafe_allow_html=True)
 
 # Sidebar for navigation
 st.sidebar.title("Navigation")
-page = st.sidebar.radio("Go to", ["Generate SQL Query", "Insert Record", "Delete Record", "Visualize Data"])
+page = st.sidebar.radio("Go to", ["Generate SQL Query", "Insert Record", "Delete Record", "Visualize Data", "View History"])
 
 if page == "Generate SQL Query":
     st.subheader("Generate SQL Query from Natural Language")
@@ -107,7 +131,7 @@ if page == "Generate SQL Query":
                 st.dataframe(df)
                 st.session_state["df"] = df
             elif response.lower().startswith(("insert", "delete", "update")):
-                execute_sql(response, "student.db")
+                execute_sql(response, "student.db", "Generated SQL Query")
                 st.success("SQL query executed successfully!")
             else:
                 st.error("Generated query is not supported for execution.")
@@ -120,27 +144,24 @@ elif page == "Insert Record":
         name = st.text_input("Name")
         class_ = st.text_input("Class")
         section = st.text_input("Section")
-        marks = st.text_input("Marks")  # Changed to text input for optional value
+        marks = st.number_input("Marks", min_value=0, max_value=100)
         submitted = st.form_submit_button("Insert Record")
         if submitted:
+            insert_sql = f"INSERT INTO STUDENT (NAME, CLASS, SECTION, MARKS) VALUES ('{name}', '{class_}', '{section}', {marks})"
             try:
-                marks_value = int(marks) if marks else "NULL"  # Convert to integer if provided
-                insert_sql = f"INSERT INTO STUDENT (NAME, CLASS, SECTION, MARKS) VALUES ('{name}', '{class_}', '{section}', {marks_value})"
-                execute_sql(insert_sql, "student.db")
+                execute_sql(insert_sql, "student.db", "Insert Record")
                 st.success("Record inserted successfully!")
-            except ValueError:
-                st.error("Marks must be a number.")
             except Exception as e:
                 st.error(f"An error occurred: {e}")
-
 elif page == "Delete Record":
     st.subheader("Delete a Record")
     with st.form("delete_form"):
         delete_name = st.text_input("Name")
         delete_class = st.text_input("Class")
         delete_section = st.text_input("Section")
-        delete_marks = st.text_input("Marks")  # Changed to text input for optional value
+        delete_marks = st.number_input("Marks", min_value=0, max_value=100, value=None)
         delete_submitted = st.form_submit_button("Delete Record")
+        
         if delete_submitted:
             delete_conditions = []
             if delete_name:
@@ -149,23 +170,20 @@ elif page == "Delete Record":
                 delete_conditions.append(f"CLASS = '{delete_class}'")
             if delete_section:
                 delete_conditions.append(f"SECTION = '{delete_section}'")
-            if delete_marks:
-                try:
-                    delete_marks_value = int(delete_marks)
-                    delete_conditions.append(f"MARKS = {delete_marks_value}")
-                except ValueError:
-                    st.error("Marks must be a number.")
+            if delete_marks is not None:  # Check if marks is provided
+                delete_conditions.append(f"MARKS = {delete_marks}")
 
             if delete_conditions:
                 delete_sql = "DELETE FROM STUDENT WHERE " + " AND ".join(delete_conditions)
-                st.write(f"Executing SQL: {delete_sql}")  # Debugging: print the query
+                st.write(f"Executing SQL: {delete_sql}")  # Debugging line
                 try:
-                    execute_sql(delete_sql, "student.db")
+                    execute_sql(delete_sql, "student.db", "Delete Record")
                     st.success("Record deleted successfully!")
                 except Exception as e:
-                    st.error(f"An error occurred: {e}")
+                    st.error(f"An error occurred while deleting the record: {e}")
             else:
                 st.warning("Please provide at least one condition to delete a record.")
+
 
 elif page == "Visualize Data":
     if "df" in st.session_state:
@@ -183,3 +201,26 @@ elif page == "Visualize Data":
                 st.write("No data available to visualize.")
     else:
         st.write("No data available. Generate a SQL query first.")
+
+elif page == "View History":
+    st.subheader("History of Changes")
+    history_df = read_sql("SELECT * FROM HISTORY ORDER BY timestamp DESC", "student.db")
+    st.dataframe(history_df)
+
+    if st.button("Clear History"):
+        try:
+            execute_sql("DELETE FROM HISTORY", "student.db", "Clear History")
+            st.success("History cleared successfully!")
+        except Exception as e:
+            st.error(f"An error occurred while clearing history: {e}")
+elif page == "View History":
+    st.subheader("History of Changes")
+    history_df = read_sql("SELECT * FROM HISTORY ORDER BY timestamp DESC", "student.db")
+    st.dataframe(history_df)
+
+    if st.button("Clear History"):
+        try:
+            execute_sql("DELETE FROM HISTORY", "student.db", "Clear History")
+            st.success("History cleared successfully!")
+        except Exception as e:
+            st.error(f"An error occurred while clearing history: {e}")
